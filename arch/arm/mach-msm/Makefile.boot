@@ -45,6 +45,7 @@ endif
 # APQ8064
    zreladdr-$(CONFIG_ARCH_APQ8064)	:= 0x80208000
 params_phys-$(CONFIG_ARCH_APQ8064)  := 0x80200100
+
 # MSM8974 & 8974PRO
    zreladdr-$(CONFIG_ARCH_MSM8974)	:= 0x00008000
 ifeq ($(CONFIG_SEC_MONDRIAN_PROJECT),y)
@@ -272,6 +273,7 @@ endif
 
 # MSM8226
    zreladdr-$(CONFIG_ARCH_MSM8226)	:= 0x00008000
+   params_phys-$(CONFIG_ARCH_MSM8226)  := 0x00000100 
 #        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-sim.dtb
 #        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-fluid.dtb
 #        dtb-$(CONFIG_ARCH_MSM8226)	+= msm8226-v1-mtp.dtb
