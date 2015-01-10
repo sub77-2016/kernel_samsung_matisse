@@ -1,0 +1,36 @@
+From 2168d86285dc32289a3e28e423fadc9a77822d74 Mon Sep 17 00:00:00 2001
+From: Jens Andersen <jens.andersen@gmail.com>
+Date: Fri, 5 Jul 2013 23:09:26 +0200
+Subject: [PATCH 6/6] Add kexec options to config
+
+---
+ arch/arm/configs/fusion3_pollux_windy_defconfig | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm/configs/fusion3_pollux_windy_defconfig b/arch/arm/configs/fusion3_pollux_windy_defconfig
+index 6288254..cab7981 100644
+--- a/arch/arm/configs/fusion3_pollux_windy_defconfig
++++ b/arch/arm/configs/fusion3_pollux_windy_defconfig
+@@ -43,6 +43,8 @@ CONFIG_MACH_MSM8960_CDP=y
+ CONFIG_MACH_SONY_FUSION3=y
+ CONFIG_MACH_SONY_POLLUX_WINDY=y
+ # CONFIG_MSM_STACKED_MEMORY is not set
++CONFIG_HAVE_END_MEM=y
++CONFIG_END_MEM=0xffffffff
+ CONFIG_KERNEL_MSM_CONTIG_MEM_REGION=y
+ # CONFIG_MSM_FIQ_SUPPORT is not set
+ # CONFIG_MSM_PROC_COMM is not set
+@@ -101,6 +103,10 @@ CONFIG_CC_STACKPROTECTOR=y
+ CONFIG_ARM_FLUSH_CONSOLE_ON_RESTART=y
+ CONFIG_CP_ACCESS=y
+ CONFIG_CRASH_NOTES=y
++CONFIG_KEXEC=y
++CONFIG_ATAGS_PROC=y
++CONFIG_KEXEC_HARDBOOT=y
++CONFIG_KEXEC_HB_PAGE_ADDR=0xFFFFE000
+ CONFIG_CPU_FREQ=y
+ CONFIG_CPU_FREQ_GOV_ONDEMAND=y
+ CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
+-- 
+1.9.1
+

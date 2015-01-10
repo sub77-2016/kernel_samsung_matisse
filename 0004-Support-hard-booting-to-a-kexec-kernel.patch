@@ -1,0 +1,402 @@
+From 0b8fe084da84a6383e4e970046327d6ab0c41926 Mon Sep 17 00:00:00 2001
+From: Jens Andersen <jens.andersen@gmail.com>
+Date: Thu, 27 Jun 2013 21:43:35 +0200
+Subject: [PATCH 4/6] Support hard booting to a kexec kernel.
+
+See KEXEC_HARDBOOT config option help for details.
+Heavily based on Kexec Hardboot work by Mike Kasick <mike@kasick.org>
+See https://github.com/mkasick/android_kernel_samsung_d2spr/
+---
+ arch/arm/Kconfig                       | 30 +++++++++++++++++++++
+ arch/arm/boot/compressed/head.S        | 26 ++++++++++++++++++
+ arch/arm/include/asm/kexec.h           |  9 +++++++
+ arch/arm/kernel/machine_kexec.c        | 14 +++++++++-
+ arch/arm/kernel/relocate_kernel.S      | 48 ++++++++++++++++++++++++++++++++++
+ arch/arm/mach-msm/board-sony_fusion3.c | 14 +++++++---
+ arch/arm/mach-msm/restart.c            | 15 +++++++++++
+ include/linux/kexec.h                  | 16 +++++++++---
+ kernel/kexec.c                         |  4 +++
+ 9 files changed, 169 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
+index 513e2f3..c565e70 100644
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -2254,6 +2254,36 @@ config ATAGS_PROC
+ 	  Should the atags used to boot the kernel be exported in an "atags"
+ 	  file in procfs. Useful with kexec.
+ 
++config KEXEC_HARDBOOT
++	bool "Support hard booting to a kexec kernel"
++	depends on KEXEC
++	help
++	  Allows hard booting (i.e., with a full hardware reboot) to a kernel
++	  previously loaded in memory by kexec.  This works around the problem of
++	  soft-booted kernel hangs due to improper device shutdown and/or
++	  reinitialization.  Support is comprised of two components:
++
++	  First, a "hardboot" flag is added to the kexec syscall to force a hard
++	  reboot in relocate_new_kernel() (which requires machine-specific assembly
++	  code).  This also requires the kexec userspace tool to load the kexec'd
++	  kernel in memory region left untouched by the bootloader (i.e., not
++	  explicitly cleared and not overwritten by the boot kernel).  Just prior
++	  to reboot, the kexec kernel arguments are stashed in a machine-specific
++	  memory page that must also be preserved.  Note that this hardboot page
++	  need not be reserved during regular kernel execution.
++
++	  Second, the zImage decompresor of the boot (bootloader-loaded) kernel is
++	  modified to check the hardboot page for fresh kexec arguments, and if
++	  present, attempts to jump to the kexec'd kernel preserved in memory.
++
++	  Note that hardboot support is only required in the boot kernel and any
++	  kernel capable of performing a hardboot kexec.  It is _not_ required by a
++	  kexec'd kernel.
++
++config KEXEC_HB_PAGE_ADDR
++	hex "Kexec hardboot page address"
++	depends on KEXEC_HARDBOOT
++
+ config CRASH_DUMP
+ 	bool "Build kdump crash kernel (EXPERIMENTAL)"
+ 	depends on EXPERIMENTAL
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+index 60d3169..762119b 100644
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -11,6 +11,10 @@
+ #include <linux/linkage.h>
+ #include <asm/memory.h>
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++#include <asm/kexec.h>
++#endif
++
+ /*
+  * Debugging stuff
+  *
+@@ -137,6 +141,28 @@ start:
+ 		teq  r0, #0      @ Check for kexec_boot_atags.
+ 		movne  r8, r0      @ Save kexec_boot_tags.
+ 		moveq  r8, r2      @ save atags pointer
++#ifdef CONFIG_KEXEC_HARDBOOT
++		/* Check hardboot page for a kexec kernel. */
++		ldr  r3, =KEXEC_HB_PAGE_ADDR
++		ldr  r0, [r3]
++		ldr  r1, =KEXEC_HB_PAGE_MAGIC
++		teq  r0, r1
++		bne  not_booting_other
++
++		/* Clear hardboot page magic to avoid boot loop. */
++		mov  r0, #0
++		str  r0, [r3]
++
++		/* Load boot arguments and jump to kexec kernel. */
++		ldr  r0, [r3, #12]  @ kexec_boot_atags (r2: boot_atags)
++		ldr  r1, [r3, #8]  @ kexec_mach_type
++		ldr  pc, [r3, #4]  @ kexec_start_address
++
++		.ltorg
++
++not_booting_other:
++#endif
++
+ #ifndef __ARM_ARCH_2__
+ 		/*
+ 		 * Booting from Angel - need to enter SVC mode and disable
+diff --git a/arch/arm/include/asm/kexec.h b/arch/arm/include/asm/kexec.h
+index c2b9b4b..632bc15 100644
+--- a/arch/arm/include/asm/kexec.h
++++ b/arch/arm/include/asm/kexec.h
+@@ -17,6 +17,11 @@
+ #define KEXEC_ARM_ATAGS_OFFSET  0x1000
+ #define KEXEC_ARM_ZIMAGE_OFFSET 0x8000
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++#define KEXEC_HB_PAGE_ADDR  UL(CONFIG_KEXEC_HB_PAGE_ADDR)
++#define KEXEC_HB_PAGE_MAGIC 0x4a5db007
++#endif
++
+ #ifndef __ASSEMBLY__
+ 
+ /**
+@@ -53,6 +58,10 @@ static inline void crash_setup_regs(struct pt_regs *newregs,
+ /* Function pointer to optional machine-specific reinitialization */
+ extern void (*kexec_reinit)(void);
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++extern void (*kexec_hardboot_hook)(void);
++#endif
++
+ #endif /* __ASSEMBLY__ */
+ 
+ #endif /* CONFIG_KEXEC */
+diff --git a/arch/arm/kernel/machine_kexec.c b/arch/arm/kernel/machine_kexec.c
+index 9c94c54..a0f7815 100644
+--- a/arch/arm/kernel/machine_kexec.c
++++ b/arch/arm/kernel/machine_kexec.c
+@@ -24,6 +24,11 @@ extern unsigned long kexec_indirection_page;
+ extern unsigned long kexec_mach_type;
+ extern unsigned long kexec_boot_atags;
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++extern unsigned long kexec_hardboot;
++void (*kexec_hardboot_hook)(void);
++#endif
++
+ static atomic_t waiting_for_crash_ipi;
+ 
+ /*
+@@ -124,6 +129,9 @@ void machine_kexec(struct kimage *image)
+ 	mem_text_write_kernel_word(&kexec_indirection_page, page_list);
+ 	mem_text_write_kernel_word(&kexec_mach_type, machine_arch_type);
+ 	mem_text_write_kernel_word(&kexec_boot_atags, image->start - KEXEC_ARM_ZIMAGE_OFFSET + KEXEC_ARM_ATAGS_OFFSET);
++#ifdef CONFIG_KEXEC_HARDBOOT
++	mem_text_write_kernel_word(&kexec_hardboot, image->hardboot);
++#endif
+ 
+ 	/* copy our kernel relocation code to the control code page */
+ 	memcpy(reboot_code_buffer,
+@@ -136,6 +144,10 @@ void machine_kexec(struct kimage *image)
+ 
+ 	if (kexec_reinit)
+ 		kexec_reinit();
+-
++#ifdef CONFIG_KEXEC_HARDBOOT
++	if (image->hardboot && kexec_hardboot_hook)
++		/* Run any final machine-specific shutdown code. */
++		kexec_hardboot_hook();
++#endif
+ 	soft_restart(reboot_code_buffer_phys);
+ }
+diff --git a/arch/arm/kernel/relocate_kernel.S b/arch/arm/kernel/relocate_kernel.S
+index d0cdedf..f2dc584 100644
+--- a/arch/arm/kernel/relocate_kernel.S
++++ b/arch/arm/kernel/relocate_kernel.S
+@@ -4,6 +4,13 @@
+ 
+ #include <asm/kexec.h>
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++#include <asm/memory.h>
++#ifdef CONFIG_ARCH_APQ8064
++#include <mach/msm_iomap.h>
++#endif
++#endif
++
+ 	.globl relocate_new_kernel
+ relocate_new_kernel:
+ 
+@@ -52,6 +59,12 @@ relocate_new_kernel:
+ 	b 0b
+ 
+ 2:
++#ifdef CONFIG_KEXEC_HARDBOOT
++	ldr  r0, kexec_hardboot
++	teq  r0, #0
++	bne  hardboot
++#endif
++
+ 	/* Jump to relocated kernel */
+ 	mov lr,r1
+ 	mov r0,#0
+@@ -60,6 +73,35 @@ relocate_new_kernel:
+  ARM(	mov pc, lr	)
+  THUMB(	bx lr		)
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++hardboot:
++	/* Stash boot arguments in hardboot page:
++	 *  0: KEXEC_HB_PAGE_MAGIC
++	 *  4: kexec_start_address
++	 *  8: kexec_mach_type
++	 * 12: kexec_boot_atags */
++	ldr  r0, =KEXEC_HB_PAGE_ADDR
++	str  r1, [r0, #4]
++	ldr  r1, kexec_mach_type
++	str  r1, [r0, #8]
++	ldr  r1, kexec_boot_atags
++	str  r1, [r0, #12]
++	ldr  r1, =KEXEC_HB_PAGE_MAGIC
++	str  r1, [r0]
++
++#ifdef CONFIG_ARCH_APQ8064
++	/* Hard reset via PMIC, decompressor jumps to kernel. */
++	ldr  r0, =APQ8064_TLMM_PHYS
++	mov  r1, #0
++	str  r1, [r0, #0x820]  @ PSHOLD_CTL_SU
++loop:  b  loop
++#else
++#error "No reboot method defined for hardboot."
++#endif
++
++	.ltorg
++#endif
++
+ 	.align
+ 
+ 	.globl kexec_start_address
+@@ -79,6 +121,12 @@ kexec_mach_type:
+ kexec_boot_atags:
+ 	.long	0x0
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++	.globl kexec_hardboot
++kexec_hardboot:
++	.long  0x0
++#endif
++
+ relocate_new_kernel_end:
+ 
+ 	.globl relocate_new_kernel_size
+diff --git a/arch/arm/mach-msm/board-sony_fusion3.c b/arch/arm/mach-msm/board-sony_fusion3.c
+index 0f4b260..cbceae0 100644
+--- a/arch/arm/mach-msm/board-sony_fusion3.c
++++ b/arch/arm/mach-msm/board-sony_fusion3.c
+@@ -221,6 +221,10 @@
+ #error "ERROR: Unknown machine!"
+ #endif
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++#include <asm/kexec.h>
++#endif
++
+ /* Section: Vibrator */
+ #if defined(CONFIG_VIBRATOR_LC898300)
+ struct lc898300_vib_cmd lc898300_vib_cmd_data = {
+@@ -734,7 +738,9 @@ static struct platform_device rdtags_device = {
+ };
+ #endif
+ 
+-#define MSM_RAM_CONSOLE_SIZE    (128 * SZ_1K)
++#define MSM_RAM_CONSOLE_SIZE    (124 * SZ_1K)
++#define KEXEC_HB_PAGE_ADDR_SIZE (SZ_4K)
++
+ #ifdef CONFIG_ANDROID_RAM_CONSOLE
+ static struct platform_device ram_console_device = {
+ 	.name           = "ram_console",
+@@ -765,7 +771,8 @@ static struct persistent_ram ram_console_pram = {
+  */
+ #define DEBUG_MEMORY_SIZE ((MSM_RAM_CONSOLE_SIZE) + \
+ 			   (CONFIG_RAMDUMP_TAGS_SIZE) + \
+-			   (S1BOOT_RPM_AREA_SIZE))
++			   (S1BOOT_RPM_AREA_SIZE)
++			   (KEXEC_HB_PAGE_ADDR_SIZE)
+ 
+ static void reserve_debug_memory(void)
+ {
+@@ -778,13 +785,14 @@ static void reserve_debug_memory(void)
+ 	ram_console_pram.size = MSM_RAM_CONSOLE_SIZE;
+ 	INIT_LIST_HEAD(&ram_console_pram.node);
+ 	ret = persistent_ram_early_init(&ram_console_pram);
+-	if (ret) {
++h	if (ret) {
+ 		pr_err("Init of persistent RAM for ram_console failed: %d\n",
+ 			ret);
+ 	} else {
+ 		pr_info("ram_console memory reserved: %#x@%#08x\n",
+ 			(unsigned int)ram_console_pram.size,
+ 			(unsigned int)ram_console_pram.start);
++		memblock_remove(KEXEC_HB_PAGE_ADDR, KEXEC_HB_PAGE_ADDR_SIZE);
+ 		bank_end -= ram_console_pram.size;
+ 	}
+ #endif
+diff --git a/arch/arm/mach-msm/restart.c b/arch/arm/mach-msm/restart.c
+index 2cef1a4..69d2bfa 100644
+--- a/arch/arm/mach-msm/restart.c
++++ b/arch/arm/mach-msm/restart.c
+@@ -38,6 +38,10 @@
+ #include "msm_watchdog.h"
+ #include "timer.h"
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++#include <asm/kexec.h>
++#endif
++
+ #define WDT0_RST	0x38
+ #define WDT0_EN		0x40
+ #define WDT0_BARK_TIME	0x4C
+@@ -308,6 +312,14 @@ static int __init msm_pmic_restart_init(void)
+ 
+ late_initcall(msm_pmic_restart_init);
+ 
++#ifdef CONFIG_KEXEC_HARDBOOT
++void msm_kexec_hardboot(void)
++{
++	/* Set PM8XXX PMIC to reset on power off. */
++	pm8xxx_reset_pwr_off(1);
++}
++#endif
++
+ static int __init msm_restart_init(void)
+ {
+ #ifdef CONFIG_MSM_DLOAD_MODE
+@@ -318,6 +330,9 @@ static int __init msm_restart_init(void)
+ 	msm_tmr0_base = msm_timer_get_timer0_base();
+ 	restart_reason = MSM_IMEM_BASE + RESTART_REASON_ADDR;
+ 	pm_power_off = msm_power_off;
++#ifdef CONFIG_KEXEC_HARDBOOT
++	kexec_hardboot_hook = msm_kexec_hardboot;
++#endif
+ 
+ 	return 0;
+ }
+diff --git a/include/linux/kexec.h b/include/linux/kexec.h
+index af84a25..edba05d 100644
+--- a/include/linux/kexec.h
++++ b/include/linux/kexec.h
+@@ -110,6 +110,9 @@ struct kimage {
+ #define KEXEC_TYPE_DEFAULT 0
+ #define KEXEC_TYPE_CRASH   1
+ 	unsigned int preserve_context : 1;
++#ifdef CONFIG_KEXEC_HARDBOOT
++  unsigned int hardboot : 1;
++#endif
+ 
+ #ifdef ARCH_HAS_KIMAGE_ARCH
+ 	struct kimage_arch arch;
+@@ -178,6 +181,9 @@ extern struct kimage *kexec_crash_image;
+ 
+ #define KEXEC_ON_CRASH		0x00000001
+ #define KEXEC_PRESERVE_CONTEXT	0x00000002
++#ifdef CONFIG_KEXEC_HARDBOOT
++#define KEXEC_HARDBOOT    0x00000004
++#endif
+ #define KEXEC_ARCH_MASK		0xffff0000
+ 
+ /* These values match the ELF architecture values.
+@@ -196,10 +202,14 @@ extern struct kimage *kexec_crash_image;
+ #define KEXEC_ARCH_MIPS    ( 8 << 16)
+ 
+ /* List of defined/legal kexec flags */
+-#ifndef CONFIG_KEXEC_JUMP
+-#define KEXEC_FLAGS    KEXEC_ON_CRASH
+-#else
++#if defined(CONFIG_KEXEC_JUMP) && defined(CONFIG_KEXEC_HARDBOOT)
++#define KEXEC_FLAGS    (KEXEC_ON_CRASH | KEXEC_PRESERVE_CONTEXT | KEXEC_HARDBOOT)
++#elif defined(CONFIG_KEXEC_JUMP)
+ #define KEXEC_FLAGS    (KEXEC_ON_CRASH | KEXEC_PRESERVE_CONTEXT)
++#elif defined(CONFIG_KEXEC_HARDBOOT)
++#define KEXEC_FLAGS    (KEXEC_ON_CRASH | KEXEC_HARDBOOT)
++#else
++#define KEXEC_FLAGS    (KEXEC_ON_CRASH)
+ #endif
+ 
+ #define VMCOREINFO_BYTES           (4096)
+diff --git a/kernel/kexec.c b/kernel/kexec.c
+index 4e2e472..aef7893 100644
+--- a/kernel/kexec.c
++++ b/kernel/kexec.c
+@@ -1004,6 +1004,10 @@ SYSCALL_DEFINE4(kexec_load, unsigned long, entry, unsigned long, nr_segments,
+ 
+ 		if (flags & KEXEC_PRESERVE_CONTEXT)
+ 			image->preserve_context = 1;
++#ifdef CONFIG_KEXEC_HARDBOOT
++		if (flags & KEXEC_HARDBOOT)
++			image->hardboot = 1;
++#endif
+ 		result = machine_kexec_prepare(image);
+ 		if (result)
+ 			goto out;
+-- 
+1.9.1
+

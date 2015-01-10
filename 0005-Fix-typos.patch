@@ -1,0 +1,36 @@
+From 31bdebcd20ccaad5cabfb9037ec214d7c1492124 Mon Sep 17 00:00:00 2001
+From: Jens Andersen <jens.andersen@gmail.com>
+Date: Sun, 30 Jun 2013 18:58:27 +0200
+Subject: [PATCH 5/6] Fix typos
+
+---
+ arch/arm/mach-msm/board-sony_fusion3.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/mach-msm/board-sony_fusion3.c b/arch/arm/mach-msm/board-sony_fusion3.c
+index cbceae0..20bd853 100644
+--- a/arch/arm/mach-msm/board-sony_fusion3.c
++++ b/arch/arm/mach-msm/board-sony_fusion3.c
+@@ -771,8 +771,8 @@ static struct persistent_ram ram_console_pram = {
+  */
+ #define DEBUG_MEMORY_SIZE ((MSM_RAM_CONSOLE_SIZE) + \
+ 			   (CONFIG_RAMDUMP_TAGS_SIZE) + \
+-			   (S1BOOT_RPM_AREA_SIZE)
+-			   (KEXEC_HB_PAGE_ADDR_SIZE)
++			   (S1BOOT_RPM_AREA_SIZE) + \
++			   (KEXEC_HB_PAGE_ADDR_SIZE))
+ 
+ static void reserve_debug_memory(void)
+ {
+@@ -785,7 +785,7 @@ static void reserve_debug_memory(void)
+ 	ram_console_pram.size = MSM_RAM_CONSOLE_SIZE;
+ 	INIT_LIST_HEAD(&ram_console_pram.node);
+ 	ret = persistent_ram_early_init(&ram_console_pram);
+-h	if (ret) {
++	if (ret) {
+ 		pr_err("Init of persistent RAM for ram_console failed: %d\n",
+ 			ret);
+ 	} else {
+-- 
+1.9.1
+

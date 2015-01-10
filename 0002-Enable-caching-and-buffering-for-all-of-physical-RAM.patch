@@ -1,0 +1,78 @@
+From cac260580d1a6ac8ce7cdfacbd73e52004908418 Mon Sep 17 00:00:00 2001
+From: Mike Kasick <mike@kasick.org>
+Date: Wed, 26 Jun 2013 21:28:24 +0200
+Subject: [PATCH 2/6] Enable caching and buffering for all of physical RAM in
+ the decompressor.
+
+Old method is to enable caching and buffering only for the 256 MB at the
+start of the decompressor image.  This makes a hardboot-kexec'd kernel very
+slow to decompress since the decompressor is located far above the kernel
+destination.  This patch reduces boot time from 35 to 8 seconds on epicmtd.
+---
+ arch/arm/boot/compressed/head.S         | 6 ++++++
+ arch/arm/mach-msm/Kconfig               | 7 +++++++
+ arch/arm/mach-msm/include/mach/memory.h | 3 +++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+index ace2dee..4f16023 100644
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -9,6 +9,7 @@
+  * published by the Free Software Foundation.
+  */
+ #include <linux/linkage.h>
++#include <asm/memory.h>
+ 
+ /*
+  * Debugging stuff
+@@ -575,9 +576,14 @@ __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
+  * bits for the RAM area only.
+  */
+ 		mov	r0, r3
++#if defined(PLAT_PHYS_OFFSET) && defined(END_MEM)
++		ldr  r9, =PLAT_PHYS_OFFSET  @ start of RAM
++		ldr  r10, =END_MEM    @ end of RAM
++#else
+ 		mov	r9, r0, lsr #18
+ 		mov	r9, r9, lsl #18		@ start of RAM
+ 		add	r10, r9, #0x10000000	@ a reasonable RAM size
++#endif
+ 		mov	r1, #0x12
+ 		orr	r1, r1, #3 << 10
+ 		add	r2, r3, #16384
+diff --git a/arch/arm/mach-msm/Kconfig b/arch/arm/mach-msm/Kconfig
+index 8dbedc1..2f13254 100644
+--- a/arch/arm/mach-msm/Kconfig
++++ b/arch/arm/mach-msm/Kconfig
+@@ -987,6 +987,13 @@ config PHYS_OFFSET
+ 	default "0x40200000" if ARCH_MSM8X60
+ 	default "0x10000000"
+ 
++config HAVE_END_MEM
++	bool "Specify highest physical RAM address at compile time"
++
++config END_MEM
++	hex "Highest physical address where system RAM resides"
++	depends on HAVE_END_MEM
++
+ config KERNEL_MSM_CONTIG_MEM_REGION
+ 	bool "Enable in-kernel contiguous memory region"
+ 	default y if ARCH_MSM8X60
+diff --git a/arch/arm/mach-msm/include/mach/memory.h b/arch/arm/mach-msm/include/mach/memory.h
+index acfbe4a..2a1df74 100644
+--- a/arch/arm/mach-msm/include/mach/memory.h
++++ b/arch/arm/mach-msm/include/mach/memory.h
+@@ -19,6 +19,9 @@
+ 
+ /* physical offset of RAM */
+ #define PLAT_PHYS_OFFSET UL(CONFIG_PHYS_OFFSET)
++#ifdef CONFIG_HAVE_END_MEM
++#define END_MEM          UL(CONFIG_END_MEM)
++#endif
+ 
+ #define MAX_PHYSMEM_BITS 32
+ #define SECTION_SIZE_BITS 28
+-- 
+1.9.1
+
