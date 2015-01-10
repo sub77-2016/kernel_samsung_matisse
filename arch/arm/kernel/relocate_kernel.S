@@ -6,7 +6,7 @@
 
 #ifdef CONFIG_KEXEC_HARDBOOT
 #include <asm/memory.h>
-#ifdef CONFIG_ARCH_APQ8064
+#ifdef CONFIG_ARCH_MSM8226
 #include <mach/msm_iomap.h>
 #endif
 #endif
@@ -89,9 +89,9 @@ hardboot:
 	ldr  r1, =KEXEC_HB_PAGE_MAGIC
 	str  r1, [r0]
 
-#ifdef CONFIG_ARCH_APQ8064
+#ifdef CONFIG_ARCH_MSM8226
 	/* Hard reset via PMIC, decompressor jumps to kernel. */
-	ldr  r0, =APQ8064_TLMM_PHYS
+	ldr  r0, =MSM8226_TLMM_PHYS
 	mov  r1, #0
 	str  r1, [r0, #0x820]  @ PSHOLD_CTL_SU
 loop:  b  loop
